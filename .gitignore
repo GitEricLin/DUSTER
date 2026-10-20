@@ -1,0 +1,9 @@
+runs/
+baselines/
+__pycache__/
+*.pt
+*.pickle
+*.index
+generated.txt
+*.log
+.ipynb_checkpoints/
