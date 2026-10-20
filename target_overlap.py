@@ -17,7 +17,7 @@ Results are reported for several K so the conclusion does not hinge on one thres
 generated.txt files must come from runs on the same test split (main.py writes test instances in a
 fixed order), e.g. ta_gold_tr1_s1, ta_leaky_gold_tr1_s1, ta_nohist_gold_tr1_s1.
 
-Usage (Colab, from the DUSTER_V2 folder):
+Usage (from the repository root):
   python target_overlap.py \
      --asof   runs/ta_gold_tr1_s1/generated.txt \
      --leaky  runs/ta_leaky_gold_tr1_s1/generated.txt \

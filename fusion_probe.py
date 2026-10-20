@@ -6,7 +6,7 @@ For test batches it measures, separately for the user token and the item token,
   * mean pairwise cosine similarity, within a batch, of the history part W^h h
     and of the identifier part W^E E   (how similar the parts are across different users / items)
 
-Usage (Colab, from the DUSTER_V2 folder):
+Usage (from the repository root):
   python fusion_probe.py --data_path .../reviews_time.pickle --index_dir .../temporal/ \
          --model runs/ta_none_tr1_s1/model.pt --cuda
 """

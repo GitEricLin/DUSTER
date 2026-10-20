@@ -1,90 +1,143 @@
-# DUSTER v2：無 leakage 的實作與依時間切分的 pipeline
+# DUSTER: point-in-time evaluation of history-aware explainable recommendation
 
-這個版本取代 Google Drive 上 `DUSTER_Code/DUSTER` 與 `DUSTER_Code/DUSTER_A` 兩份程式。兩個 model 現在由同一支 `main.py` 執行，用 `--aspect_mode` 切換：
+This repository contains the code for the paper *Auditing History Leakage in Explainable Recommendation via Point-in-Time Data Contracts* (under review).
 
-| 原本的 model | v2 指令 | 評估 protocol |
+DUSTER is a dual-sequence, history-aware Transformer that jointly predicts a rating and generates a short natural-language explanation. It encodes the review histories of a user and of an item separately. The code also implements the data side of the paper:
+
+- recovering review timestamps;
+- a global chronological split;
+- an **as-of (point-in-time) history construction** with an automated leakage audit;
+- two evaluation protocols.
+
+## Evaluation protocols
+
+One script, `main.py`, runs every variant; `--aspect_mode` selects the protocol:
+
+| `--aspect_mode` | Protocol | Meaning |
 |---|---|---|
-| DUSTER | `--aspect_mode gold` | feature-given：test 時餵入 ground-truth aspect，只當作 upper bound |
-| DUSTER_A | `--aspect_mode pred` | decision-time：aspect 只從 history 預測 |
-| 不放 aspect token | `--aspect_mode none` | ablation 用 |
+| `gold` | feature-given (oracle-assisted) | the ground-truth aspect of the target review is fed to the generator at test time; report only as a reference, since it is unavailable at recommendation time |
+| `pred` | decision-time | the aspect is predicted from the histories only |
+| `none` | no aspect token | ablation |
 
-使用前，把原專案的 `bleu.py` 與 `rouge.py` 複製到本資料夾。這兩支檔案沒有改動。
+## As-of history construction
 
-## 1. 修正了什麼
+For every target record, the user and item histories are built separately and contain only records that were available before it:
 
-| # | 原本的問題 | v2 的修正 |
-|---|---|---|
-| 1 | `group_data()` 用整個 `reviews.pickle`（train、valid、test 全部）建立 history，`[-100:]` 也沒有排除 target 本身，導致 test sample 的正確答案就在 input 裡 | history 改成**逐筆 target 建立**：一律排除 target 本身；只看得到 split rank 不高於 target 的 record（train sample 只看 train，valid 看 train+valid，test 看全部）；有 timestamp 時只取 `time < t` 的 review，依時間排序後保留最近 `his_len` 篇 |
-| 2 | 資料沒有時間欄位，「most recent」實際上是檔案順序 | 用 `prep/add_timestamps.py` 從原始資料補回時間，再用 `prep/make_temporal_split.py` 做 global temporal split |
-| 3 | DUSTER 的 GRU 輸出算完就丟掉 | GRU 輸出經 residual 後接 attention pooling；history 以 `pack_padded_sequence` 依實際長度處理 |
-| 4 | Attention 把 padding review 也算進去 | Attention 加上 padding mask；history 為空時輸出 0 |
-| 5 | Item ID embedding 誤用 `user_embeddings(item)`；user 與 item 共用同一組 `W1/b1` | 改用 `item_embeddings`；`user_fuse` 與 `item_fuse` 分開 |
-| 6 | DUSTER_A 把 **user** history 送進 item encoder | user 與 item 各自有獨立的 `HistoryEncoder` |
-| 7 | DUSTER_A 的 FMR 拿 `"feature adjective"` 字串跟單一 feature word 比對，結果永遠是 0.00 | FMR 改為和 ground-truth **feature word** 比對 |
-| 8 | 「learnable mask」名稱與論文描述不符 | 程式改名為 `feature_gate`：逐維度縮放的向量 g ∈ R^d，所有 review 共用，並非 review-level gate |
-| 9 | DUSTER_A 的 aspect 預測涵蓋整個 vocabulary | aspect logits 限制在 feature-word vocabulary 內；可用 `--aspect_source user\|item\|joint` 選擇 |
-| 10 | `reviews.pickle` 被重複讀取 3 次；model 在 `forward()` 裡直接讀 corpus | pickle 只讀一次；history 在 model 外部建好再傳入 |
-| 11 | 沒有任何 leakage 檢查 | 訓練前自動執行 `check_leakage`，抽樣檢查 valid 與 test，有問題就中止 |
+- the target record itself is always excluded;
+- only records whose split rank is not later than the target's are visible: training targets see training records, validation targets see training and validation records, and test targets see all three;
+- when timestamps exist, only records **strictly earlier** than the target are used, in chronological order, keeping the most recent `--his_len` reviews.
 
-## 2. 補回 timestamp
+Before training, `main.py` checks a sample of validation and test instances (`--check_leakage`, default 1,000) and aborts if any history contains the target or a later record. `audit_full.py` runs the same check on every instance.
 
-建議在 Colab 掛載 Google Drive 後執行。
+`--history_scope` controls the construction:
 
-| Dataset | 原始資料 | 連接欄位 | 時間欄位 |
+| Value | History |
+|---|---|
+| `auto` (default) | `as_of` if every record has a timestamp, otherwise `train` |
+| `as_of` | point-in-time history as described above (requires timestamps) |
+| `train` | training records only, target excluded; for random splits without timestamps |
+| `leaky` | reproduces the unconstrained pipeline, in which the target can appear in its own history; **for the leakage study only** |
+
+## Repository structure
+
+| File | Purpose |
+|---|---|
+| `main.py` | training and evaluation (all protocols, ablations and fusion variants) |
+| `module.py` | model: history encoders, Transformer, rating / context / explanation / aspect heads |
+| `utils.py` | data loading, as-of history construction, leakage check, metrics |
+| `bleu.py`, `rouge.py` | BLEU and ROUGE, from [tensorflow/nmt](https://github.com/tensorflow/nmt) as used by PETER |
+| `prep/add_timestamps.py` | recovers review timestamps by joining `reviews.pickle` with the raw data |
+| `prep/make_temporal_split.py` | global chronological split (train / validation / test) |
+| `audit_full.py` | full (non-sampled) leakage audit of all splits |
+| `run_all.sh` | runs datasets × protocols × 5 seeds |
+| `aggregate_results.py` | mean ± standard deviation of `results.json` over seeds |
+| `output_stats.py` | diversity of generated explanations and reproducible example selection |
+| `target_overlap.py` | how often outputs reuse distinctive reference tokens (leaky vs. as-of), with an exact McNemar test |
+| `fusion_probe.py` | contribution of the history vs. the ID embedding in a trained model |
+
+## Requirements
+
+Python 3 and the packages in `requirements.txt` (PyTorch ≥ 2.0; `ijson` for streaming the large TripAdvisor JSON file). A GPU is recommended for training.
+
+## Data
+
+The code uses the PETER-style `reviews.pickle` files and index files (Li et al., ACL 2021) for TripAdvisor, Yelp, Amazon Clothing and Amazon Movies & TV. Timestamps are recovered from the raw data:
+
+| Dataset | Raw data | Join key | Time field |
 |---|---|---|---|
-| Amazon Clothing / Movies | Amazon 2014（McAuley）的 `reviews_Clothing_Shoes_and_Jewelry_5.json.gz` 或 `reviews_Movies_and_TV_5.json.gz`（5-core 或完整版都可以），下載頁：http://jmcauley.ucsd.edu/data/amazon/ | `(reviewerID, asin)` | `unixReviewTime` |
-| Yelp | Yelp Open Dataset 的 `yelp_academic_dataset_review.json`，需到 Yelp 官網同意授權後下載 | `(user_id, business_id)` | `date` |
-| TripAdvisor | 已在 `TripAdvisor_Dataset/OriginalReviews.json` | `(userID, hotelID)` | `reviewDate` |
+| Amazon Clothing / Movies | Amazon 2014 (McAuley): `reviews_Clothing_Shoes_and_Jewelry_5.json.gz` or `reviews_Movies_and_TV_5.json.gz` (5-core or full), http://jmcauley.ucsd.edu/data/amazon/ | `(reviewerID, asin)` | `unixReviewTime` |
+| Yelp | Yelp Open Dataset, `yelp_academic_dataset_review.json` (download from Yelp after accepting its license) | `(user_id, business_id)` | `date` |
+| TripAdvisor | `OriginalReviews.json` (Li et al.) | `(userID, hotelID)` | `reviewDate` |
 
-範例（Clothing）：
+For TripAdvisor, most records have no `reviewDate`. Reviews are therefore ordered by the review id in `reviewURL`, which is assigned sequentially; this gives an approximate chronological order. Datasets are not redistributed here.
+
+### 1. Recover timestamps and split
 
 ```bash
-cd prep
-python add_timestamps.py --dataset amazon \
-  --pickle /content/drive/MyDrive/Amazon_Datasets/ClothingShoesAndJewelry/reviews.pickle \
+python prep/add_timestamps.py --dataset amazon \
+  --pickle data/Clothing/reviews.pickle \
   --raw reviews_Clothing_Shoes_and_Jewelry_5.json.gz \
-  --out /content/drive/MyDrive/Amazon_Datasets/ClothingShoesAndJewelry/reviews_time.pickle
+  --out data/Clothing/reviews_time.pickle
 
-python make_temporal_split.py \
-  --pickle /content/drive/MyDrive/Amazon_Datasets/ClothingShoesAndJewelry/reviews_time.pickle \
-  --out_dir /content/drive/MyDrive/Amazon_Datasets/ClothingShoesAndJewelry/temporal \
+python prep/make_temporal_split.py \
+  --pickle data/Clothing/reviews_time.pickle \
+  --out_dir data/Clothing/temporal \
   --ratio 0.8 0.1 0.1 --drop_cold
 ```
 
-TripAdvisor 的 `OriginalReviews.json` 約 590 MB。建議先 `pip install ijson`，以 streaming 方式讀取。
+Use `--dataset yelp` or `--dataset tripadvisor` for the other datasets. `--drop_cold` removes validation and test records whose user or item does not occur in the training split. Each run writes `reviews_time.pickle.stats.json` (match rate, time range) and `temporal/split_stats.json`.
 
-每個 dataset 會輸出 `reviews_time.pickle.stats.json`（match rate、時間範圍）與 `temporal/split_stats.json`，這兩份數字要寫進論文。
-
-## 3. 量化原本程式的 leakage（給論文或 response letter 用）
+### 2. Train and evaluate
 
 ```bash
-python prep/audit_old_leakage.py --pickle .../reviews.pickle --index_dir .../1
-```
-
-會印出 test sample 的 target 句子出現在原版 user／item history 中的比例。在合成資料上的結果是 100%。
-
-## 4. 訓練與評估
-
-```bash
-python main.py --data_path .../reviews_time.pickle --index_dir .../temporal \
+python main.py --data_path data/Clothing/reviews_time.pickle \
+               --index_dir data/Clothing/temporal \
                --aspect_mode pred --cuda --seed 1 --checkpoint runs/clothing_pred_s1/
-bash run_all.sh                              # 4 個 dataset × {gold, pred} × 5 個 seed
+
+DATA_ROOT=/path/to/datasets bash run_all.sh      # all datasets × {gold, pred} × 5 seeds
 python aggregate_results.py "runs/clothing_pred_s*"
 ```
 
-- Ablation 參數：`--no_user_hist`、`--no_item_hist`、`--no_gate`、`--no_gru`、`--no_attn`、`--no_duster_mask`、`--aspect_mode none`
-- 若沿用原本的 random split（沒有 timestamp）：`--history_scope train`。history 只用 train 的 review，並排除 target，可與 PETER／EPER 的原始設定比較。
-- 若想讓 vocabulary 也只由 train 建立：`--vocab_scope train`
+Each run writes `model.pt`, `generated.txt` and `results.json` to the `--checkpoint` folder.
 
-**Baseline 也要重跑：** PETER+、EPER、PESI 都要在新的 temporal split 上重跑。DGER 與 SERMON 原論文的數字不能直接比較，只能另外標註。
+Useful options:
 
-## 5. 已用合成資料測試
+- ablations: `--no_user_hist`, `--no_item_hist`, `--no_gate`, `--no_gru`, `--no_attn`, `--no_duster_mask`, `--aspect_mode none`;
+- fusion of history and ID embedding: `--fuse concat|rezero|gate` (`rezero` is the zero-initialized residual fusion);
+- aspect predictor in `pred` mode: `--aspect_source user|item|joint|freq` (`freq` = most frequent aspect in the user's and item's training reviews);
+- vocabulary built from training data only: `--vocab_scope train`.
 
-在 CPU（PyTorch 2.x）上用合成資料跑過以下流程：
+### 3. Audits and analyses
 
-- `add_timestamps.py`：含一對多 pair 的消歧與 unmatched 的處理
-- `make_temporal_split.py`
-- `audit_old_leakage.py`
-- `main.py`：`gold`／`pred`／`none` 三種模式、`feature_adj`、`joint`、各種 ablation，以及 random split 的 `train` scope
+```bash
+# full leakage audit (as-of contract, all splits)
+python audit_full.py --data_path data/TripAdvisor/reviews_time.pickle \
+                     --index_dir data/TripAdvisor/temporal --out runs/leakage_full_asof.json
 
-Leakage check 全部 PASS。真實資料尚未執行。
+# the same audit on the unconstrained (leaky) histories
+python audit_full.py --data_path ... --index_dir ... --history_scope leaky \
+                     --splits valid test --out runs/leakage_full_leaky.json
+
+# target reuse: leaky vs. as-of outputs on the same test split
+python target_overlap.py --asof runs/ta_gold_s1/generated.txt \
+                         --leaky runs/ta_leaky_gold_s1/generated.txt \
+                         --nohist runs/ta_nohist_gold_s1/generated.txt \
+                         --data_path ... --index_dir ... --out runs/target_overlap.json
+
+# output diversity, and history contribution in a trained model
+python output_stats.py runs/ta_gold_s1/generated.txt runs/ta_nohist_gold_s1/generated.txt
+python fusion_probe.py --data_path ... --index_dir ... --model runs/ta_gold_s1/model.pt --cuda
+```
+
+## Differences from the original DUSTER implementation
+
+- Histories are built per target record under the as-of contract. Previously they were taken from the whole review file, and the target sentence could appear in its own history.
+- The GRU output of the history encoder is used, histories are packed by their true lengths, and attention pooling masks padded reviews.
+- User and item histories have separate encoders, the item ID uses its own embedding, and user and item fusion layers are separate.
+- The "learnable mask" is implemented and named as what it is: a feature-wise gating vector shared by all reviews (`feature_gate`).
+- Aspect logits are restricted to the feature-word vocabulary, and FMR is computed against the ground-truth feature word.
+- The data file is loaded once, and histories are passed to the model rather than read inside `forward()`.
+
+## Acknowledgements
+
+The BLEU and ROUGE implementations come from [tensorflow/nmt](https://github.com/tensorflow/nmt), and the data format and evaluation follow [PETER](https://github.com/lileipisces/PETER) (Li et al., ACL 2021).

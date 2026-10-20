@@ -31,16 +31,16 @@ def _get_ngrams(n, text):
   """
   ngram_set = set()
   text_length = len(text)
-  #計算在預測的文本中針對給定的n-gram可能的組數
+  # number of n-gram start positions in the text
   max_index_ngram_start = text_length - n
   for i in range(max_index_ngram_start + 1):
-    #分別擷取文字片段的gram(數量由n決定)，並以tuple型態儲存，再加到ngram_set
+    # add every n-gram of length n (as a tuple) to ngram_set
     ngram_set.add(tuple(text[i:i + n]))
-  #回傳每一個n-gram的結果
+  # return the set of n-grams
   return ngram_set
 
 
-#把句子逐字拆分成word，形狀為['a','b','c']
+# split sentences into a flat list of words, e.g. ['a', 'b', 'c']
 def _split_into_words(sentences):
   """Splits multiple sentences into words and flattens the result"""
   return list(itertools.chain(*[_.split(" ") for _ in sentences]))
@@ -49,16 +49,16 @@ def _split_into_words(sentences):
 def _get_word_ngrams(n, sentences):
   """Calculates word n-grams for multiple sentences.
   """
-  #檢查句子與n-gram是否皆大於0，否則中斷程式
+  # require at least one sentence and n > 0
   assert len(sentences) > 0
   assert n > 0
 
-  #把句子拆分為word計算n-gram
+  # split the sentences into words and compute their n-grams
   words = _split_into_words(sentences)
   return _get_ngrams(n, words)
 
 
-#(拆分成word的模型預測的文本, 拆分成word的ground truth的文本)
+# x: tokenized generated text, y: tokenized reference
 def _len_lcs(x, y):
   """
   Returns the length of the Longest Common Subsequence between sequences x
@@ -77,7 +77,7 @@ def _len_lcs(x, y):
   return table[n, m]
 
 
-#(拆分成word的模型預測的文本, 拆分成word的ground truth的文本)
+# x: tokenized generated text, y: tokenized reference
 def _lcs(x, y):
   """
   Computes the length of the longest common subsequence (lcs) between two
@@ -92,26 +92,26 @@ def _lcs(x, y):
   Returns:
     Table of dictionary of coord and len lcs
   """
-  #計算拆分成word的模型預測的文本和拆分成word的ground truth的文本的長度
+  # lengths of the two token sequences
   n, m = len(x), len(y)
-  #初始劃一個字典用來儲存lcs長度
+  # DP table mapping (i, j) to the LCS length of x[:i] and y[:j]
   table = dict()
   for i in range(n + 1):
     for j in range(m + 1):
-      #若有一個字串為0，則lcs長度為0
+      # an empty prefix has LCS length 0
       if i == 0 or j == 0:
         table[i, j] = 0
-      #如果兩個字串match，則lcs長度加1
+      # matching tokens extend the LCS by 1
       elif x[i - 1] == y[j - 1]:
         table[i, j] = table[i - 1, j - 1] + 1
-      #否則，取table[i-1,j]和table[i,j-1]中的最大值，這代表忽略當前字串後的最大lcs長度
+      # otherwise take the better of dropping the last token of x or of y
       else:
         table[i, j] = max(table[i - 1, j], table[i, j - 1])
-  #回傳lcs的長度
+  # return the full DP table
   return table
 
 
-#(拆分成word的模型預測的文本, 拆分成word的ground truth的文本)
+# x: tokenized generated text, y: tokenized reference
 def _recon_lcs(x, y):
   """
   Returns the Longest Subsequence between x and y.
@@ -124,33 +124,33 @@ def _recon_lcs(x, y):
   Returns:
     sequence: LCS of x and y
   """
-  #計算拆分成word的模型預測的文本和拆分成word的ground truth的文本的長度
+  # lengths of the two token sequences
   i, j = len(x), len(y)
-  #計算拆分成word的模型預測的文本和拆分成word的ground truth的文本的最長公共子序列(lcs)的長度
+  # DP table of LCS lengths
   table = _lcs(x, y)
 
   def _recon(i, j):
     """private recon calculation"""
-    #如果有一個字串為0，則回傳空list
+    # an empty prefix yields an empty LCS
     if i == 0 or j == 0:
       return []
-    #如果x[i-1]等於y[j-1]，則把這個match的word加入到結果中，並繼續遞歸計算前一個位置的lcs
+    # matching tokens belong to the LCS; recurse on the shorter prefixes
     elif x[i - 1] == y[j - 1]:
       return _recon(i - 1, j - 1) + [(x[i - 1], i)]
-    #如果table[i-1,j]大於table[i,j-1]，則遞歸計算去掉x中目前word的lcs
+    # otherwise follow the larger subproblem: drop the last token of x
     elif table[i - 1, j] > table[i, j - 1]:
       return _recon(i - 1, j)
-    #否則，遞歸計算去掉y中目前word的lcs
+    # ... or drop the last token of y
     else:
       return _recon(i, j - 1)
 
-  #用map提取每個match word的word部分(忽略index)，再轉換為tuple
+  # keep only the words (drop the positions) and convert to a tuple
   recon_tuple = tuple(map(lambda x: x[0], _recon(i, j)))
-  #回傳lcs的結果
+  # return the LCS
   return recon_tuple
 
 
-#(模型預測的文本, ground truth的文本, n-gram的數量)
+# arguments: generated sentences, reference sentences, n-gram order
 def rouge_n(evaluated_sentences, reference_sentences, n=2):
   """
   Computes ROUGE-N of two text collections of sentences.
@@ -168,39 +168,38 @@ def rouge_n(evaluated_sentences, reference_sentences, n=2):
   Raises:
     ValueError: raises exception if a param has len <= 0
   """
-  #如果模型預測的文本或ground truth的文本小於等於0，則報錯
+  # both collections must be non-empty
   if len(evaluated_sentences) <= 0 or len(reference_sentences) <= 0:
     raise ValueError("Collections must contain at least 1 sentence.")
 
-  #計算模型預測文本的n-gram
+  # n-grams of the generated text
   evaluated_ngrams = _get_word_ngrams(n, evaluated_sentences)
-  #計算ground truth文本的n-gram
+  # n-grams of the reference
   reference_ngrams = _get_word_ngrams(n, reference_sentences)
-  #計算ground truth文本的長度
+  # number of distinct reference n-grams
   reference_count = len(reference_ngrams)
-  #計算模型預測文本的長度
+  # number of distinct generated n-grams
   evaluated_count = len(evaluated_ngrams)
 
   # Gets the overlapping ngrams between evaluated and reference
-  #計算兩個集合都包含的元素，也就是ground truth與預測結果重複的n-gram
   overlapping_ngrams = evaluated_ngrams.intersection(reference_ngrams)
-  #計算ground truth與預測結果重疊的n-gram的長度
+  # number of overlapping n-grams
   overlapping_count = len(overlapping_ngrams)
 
   # Handle edge case. This isn't mathematically correct, but it's good enough
-  #判斷模型預測文本的長度是否為0(以免分母為0)，若是，則precision也為0；否則，precision為重疊的n-gram的長度在模型預測文本的長度的占比率
+  # precision = overlap / generated n-grams (0 if there are none)
   if evaluated_count == 0:
     precision = 0.0
   else:
     precision = overlapping_count / evaluated_count
 
-  #判斷ground truth文本的長度是否為0(以免分母為0)，若是，則recall也為0；否則，recall為重疊的n-gram的長度在ground truth文本的長度的占比率
+  # recall = overlap / reference n-grams (0 if there are none)
   if reference_count == 0:
     recall = 0.0
   else:
     recall = overlapping_count / reference_count
 
-  #計算f1-socre，分母加上極小數(1e-8)避免為分母為0
+  # F1; the 1e-8 term avoids division by zero
   f1_score = 2.0 * ((precision * recall) / (precision + recall + 1e-8))
 
   # return overlapping_count / reference_count
@@ -221,20 +220,20 @@ def _f_p_r_lcs(llcs, m, n):
   Returns:
     Float. LCS-based F-measure score
   """
-  #計算lcs長度在ground truth文本長度的占比，也就是計算在ground truth文本中有多少word跟模型預測的文本match
+  # recall: share of reference words covered by the LCS
   r_lcs = llcs / m
-  #計算lcs長度在模型預測文本長度的占比，也就是計算在模型預測文本中有多少word跟ground truth的文本match
+  # precision: share of generated words covered by the LCS
   p_lcs = llcs / n
-  #beta是precision和recall之間的比例，用來加權F-measure計算，分母加上1e-12是為了防止分母為0
+  # beta = P/R weights the F-measure; 1e-12 avoids division by zero
   beta = p_lcs / (r_lcs + 1e-12)
-  #計算F-score分數
+  # F-measure
   num = (1 + (beta**2)) * r_lcs * p_lcs
   denom = r_lcs + ((beta**2) * p_lcs)
   f_lcs = num / (denom + 1e-12)
   return f_lcs, p_lcs, r_lcs
 
 
-#(模型預測的文本, ground truth的文本)
+# arguments: generated sentences, reference sentences
 def rouge_l_sentence_level(evaluated_sentences, reference_sentences):
   """
   Computes ROUGE-L (sentence level) of two text collections of sentences.
@@ -262,20 +261,20 @@ def rouge_l_sentence_level(evaluated_sentences, reference_sentences):
   Raises:
     ValueError: raises exception if a param has len <= 0
   """
-  #如果模型預測的文本或ground truth的文本小於等於0，則報錯
+  # both collections must be non-empty
   if len(evaluated_sentences) <= 0 or len(reference_sentences) <= 0:
     raise ValueError("Collections must contain at least 1 sentence.")
-  #把句子拆分為word計算n-gram
+  # split the sentences into words
   reference_words = _split_into_words(reference_sentences)
   evaluated_words = _split_into_words(evaluated_sentences)
-  #計算ground truth文本的長度
+  # reference length in words
   m = len(reference_words)
-  #計算模型預測文本的長度
+  # generated length in words
   n = len(evaluated_words)
   
-  #計算模型預測的文本和ground truth的文本的最長公共子序列(lcs)
+  # LCS length between generated text and reference
   lcs = _len_lcs(evaluated_words, reference_words)
-  #回傳F-score、precision和recall
+  # return F-score, precision and recall
   return _f_p_r_lcs(lcs, m, n)
 
 
@@ -299,29 +298,29 @@ def _union_lcs(evaluated_sentences, reference_sentence):
   ValueError:
     Raises exception if a param has len <= 0
   """
-  #如果模型預測的文本小於等於0，則報錯
+  # the generated collection must be non-empty
   if len(evaluated_sentences) <= 0:
     raise ValueError("Collections must contain at least 1 sentence.")
 
-  #初始化一個空集合，用來儲存聯集的lcs
+  # union of the LCS words over all generated sentences
   lcs_union = set()
-  #把ground truth的文本拆分為word
+  # split the reference sentence into words
   reference_words = _split_into_words([reference_sentence])
-  #用來累加所有lcs的總長度
+  # sum of the individual LCS lengths
   combined_lcs_length = 0
   for eval_s in evaluated_sentences:
-    #把模型預測的文本分別拆分為word
+    # split the generated sentence into words
     evaluated_words = _split_into_words([eval_s])
-    #lcs的結果
+    # LCS between the reference and this generated sentence
     lcs = set(_recon_lcs(reference_words, evaluated_words))
-    #計算lcs的長度並加總到combined_lcs_length
+    # add its length to combined_lcs_length
     combined_lcs_length += len(lcs)
-    #把lcs_union和lcs進行聯集
+    # add its words to the union
     lcs_union = lcs_union.union(lcs)
 
-  #計算lcs_union的元素數量
+  # size of the union LCS
   union_lcs_count = len(lcs_union)
-  #計算聯集lcs的值，用lcs_union的元素數量除以lcs的總長度
+  # union LCS size divided by the combined LCS length
   union_lcs_value = union_lcs_count / combined_lcs_length
   return union_lcs_value
 
@@ -354,27 +353,25 @@ def rouge_l_summary_level(evaluated_sentences, reference_sentences):
   Raises:
     ValueError: raises exception if a param has len <= 0
   """
-  #如果模型預測的文本或ground truth的文本小於等於0，則報錯
+  # both collections must be non-empty
   if len(evaluated_sentences) <= 0 or len(reference_sentences) <= 0:
     raise ValueError("Collections must contain at least 1 sentence.")
 
   # total number of words in reference sentences
-  #計算ground truth文本中word的長度
   m = len(_split_into_words(reference_sentences))
 
   # total number of words in evaluated sentences
-  #計算模型預測文本中word的長度
   n = len(_split_into_words(evaluated_sentences))
 
   union_lcs_sum_across_all_references = 0
   for ref_s in reference_sentences:
-    #計算模型預測的文本和一個ground truth句子之間的聯集lcs的比例值
+    # add the union-LCS score of the generated text against this reference sentence
     union_lcs_sum_across_all_references += _union_lcs(evaluated_sentences, ref_s)
-  #回傳F-score、precision和recall
+  # return F-score, precision and recall
   return _f_p_r_lcs(union_lcs_sum_across_all_references, m, n)
 
 
-#(串起來的模型預測文本序列, 串起來的ground truth文本序列)
+# arguments: list of generated texts, list of reference texts
 def rouge(hypotheses, references):
   """Calculates average rouge scores for a list of hypotheses and
   references"""
@@ -385,22 +382,19 @@ def rouge(hypotheses, references):
   # hypotheses, references = zip(*hyps_and_refs)
 
   # Calculate ROUGE-1 F1, precision, recall scores
-  #計算rouge-1的F1-score、precision和recall
   rouge_1 = [
       rouge_n([hyp], [ref], 1) for hyp, ref in zip(hypotheses, references)
   ]
-  #分別計算平均值
+  # average over all pairs
   rouge_1_f, rouge_1_p, rouge_1_r = map(np.mean, zip(*rouge_1))
 
   # Calculate ROUGE-2 F1, precision, recall scores
-  #計算rouge-2的F1-score、precision和recall
   rouge_2 = [
       rouge_n([hyp], [ref], 2) for hyp, ref in zip(hypotheses, references)
   ]
   rouge_2_f, rouge_2_p, rouge_2_r = map(np.mean, zip(*rouge_2))
 
   # Calculate ROUGE-L F1, precision, recall scores
-  #計算rouge-l的F1-score、precision和recall
   rouge_l = [
       rouge_l_sentence_level([hyp], [ref])
       for hyp, ref in zip(hypotheses, references)

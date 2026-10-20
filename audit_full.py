@@ -4,7 +4,7 @@ Full (non-sampled) leakage audit for DUSTER v2.
 Runs DataLoader.check_leakage() on EVERY instance of the chosen splits instead of the
 1,000-instance sample that main.py uses (--check_leakage 1000). No training is done.
 
-Put this file in the DUSTER_V2 folder (next to utils.py, bleu.py, rouge.py) and run, e.g.:
+Run from the repository root (next to utils.py), e.g.:
 
   python audit_full.py --data_path .../TripAdvisor/reviews_time.pickle \
                        --index_dir .../TripAdvisor/temporal \

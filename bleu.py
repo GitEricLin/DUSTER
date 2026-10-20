@@ -25,23 +25,23 @@ def _get_ngrams(segment, max_order):
     The Counter containing all n-grams upto max_order in segment
     with a count of how many times each n-gram occurred.
   """
-  #創建一個字典型態的計數器，用來計算可迭代物件中每個物件的數量
+  # Counter that maps each n-gram to its number of occurrences
   ngram_counts = collections.Counter()
   for order in range(1, max_order + 1):
     for i in range(0, len(segment) - order + 1):
-      #tuple類似list，但它使用小括號且後面加逗號，另外建立後就不能修改內容
-      #分別擷取文字片段的gram(數量由max_order決定)，並以tuple型態儲存
+      # n-grams are stored as tuples (immutable, hence hashable)
+      # extract every n-gram of length `order` (1..max_order) from the segment
       ngram = tuple(segment[i:i+order])
-      #gram的count加1，且由大到小排序
+      # increment the count of this n-gram
       ngram_counts[ngram] += 1
-  #回傳每一個n-gram的結果
+  # return the n-gram counts
   return ngram_counts
 
 # gn = _get_ngrams("These is", 2)
 # print(gn)
 
-#smooth策略是指當n>1時，將1個count加到重疊的n-gram和總ngram的count中
-#reference_corpus是ground truth；translation_corpus是模型預測的文本
+# smooth=True adds 1 to both the matched and the possible n-gram counts of every order
+# reference_corpus: ground-truth references; translation_corpus: generated texts
 def compute_bleu(reference_corpus, translation_corpus, max_order=4, smooth=False):
   """Computes BLEU score of translated segments against one or more references.
 
@@ -57,41 +57,41 @@ def compute_bleu(reference_corpus, translation_corpus, max_order=4, smooth=False
     3-Tuple with the BLEU score, n-gram precisions, geometric mean of n-gram
     precisions and brevity penalty.
   """
-  #初始化一個全為0的list，用來存重疊的文本中每個n-gram的數量，也就是公式BLEU的分子
+  # matched n-gram counts per order (numerator of the modified precision)
   matches_by_order = [0] * max_order
-  #用來存預測的文本中針對給定的n-gram可能的組數，也就是公式BLEU的分母
+  # possible n-gram counts per order in the generated text (denominator)
   possible_matches_by_order = [0] * max_order
   reference_length = 0
   translation_length = 0
   for (references, translation) in zip(reference_corpus, translation_corpus):
-    #加總所有最短ground truth的長度
-    #如果預測文本比ground truth短會被懲罰，因此選最短的ground truth計算懲罰，讓結果比較保守
+    # accumulate the length of the shortest reference of each segment
+    # (the brevity penalty uses the shortest reference, which is the conservative choice)
     reference_length += min(len(r) for r in references)
-    #加總所有預測文本的長度
+    # accumulate the length of the generated texts
     translation_length += len(translation)
 
-    #用來儲存所有ground truth的n-gram和count合併的結果
+    # n-gram counts merged over all references
     merged_ref_ngram_counts = collections.Counter()
     for reference in references:
-      #|=表只儲存不重複的n-gram
+      # |= keeps, for each n-gram, the maximum count over the references
       merged_ref_ngram_counts |= _get_ngrams(reference, max_order)
-    #用來儲存預測文本的n-gram和count的結果
+    # n-gram counts of the generated text
     translation_ngram_counts = _get_ngrams(translation, max_order)
-    #計算ground truth與預測結果重複的n-gram與次數
+    # clipped overlap: each n-gram counted at most as often as in the references
     overlap = translation_ngram_counts & merged_ref_ngram_counts
-    #累加重疊的文本中每個n-gram的數量，ex:n-gram=2加到matches_by_order[1]中
+    # add overlapping counts by order, e.g. a bigram goes to matches_by_order[1]
     for ngram in overlap:
       matches_by_order[len(ngram)-1] += overlap[ngram]
     
     for order in range(1, max_order+1):
-      #計算在預測的文本中針對給定的n-gram可能的組數，ex:文本為the movie is good.且n-gram為2，則possible_matches則是3(the movie, movie is, is good)
+      # number of n-grams of this order in the generated text, e.g. 'the movie is good' has 3 bigrams
       possible_matches = len(translation) - order + 1
       if possible_matches > 0:
         possible_matches_by_order[order-1] += possible_matches
 
   precisions = [0] * max_order
   for i in range(0, max_order):
-    #判斷是否使用smooth技術，若是則分子與分母都加1
+    # with smoothing, add 1 to numerator and denominator
     if smooth:
       precisions[i] = ((matches_by_order[i] + 1.) / (possible_matches_by_order[i] + 1.))
     else:
@@ -100,19 +100,19 @@ def compute_bleu(reference_corpus, translation_corpus, max_order=4, smooth=False
       else:
         precisions[i] = 0.0
 
-  #判斷是否所有n-gram的precision都大於0，若是則計算幾何平均；若否則跳過並給定為0
+  # geometric mean of the precisions if all are positive, otherwise 0
   if min(precisions) > 0:
-    #對每個n-gram的precision取log，然後算它們的平均值
+    # average of the log precisions
     p_log_sum = sum((1. / max_order) * math.log(p) for p in precisions)
-    #再把log平均值轉回原始空間，得到幾何平均值
+    # exponentiate to obtain the geometric mean
     geo_mean = math.exp(p_log_sum)
   else:
     geo_mean = 0
 
-  #計算ground truth和模型預測文本長度的比例，用以計算簡短懲罰
+  # length ratio of generated text to reference, used for the brevity penalty
   ratio = float(translation_length) / reference_length
 
-  #如果比例大於1，表示模型預測文本的長度較長，則懲罰較大
+  # no penalty if the generated text is longer than the reference; otherwise exp(1 - 1/ratio)
   if ratio > 1.0:
     bp = 1.
   else:
@@ -120,5 +120,5 @@ def compute_bleu(reference_corpus, translation_corpus, max_order=4, smooth=False
 
   bleu = geo_mean * bp
 
-  #回傳bleu分數、各個n-gram順序的precisions、簡短懲罰、ground truth和模型預測文本長度的比例、模型預測文本的總長度、ground truth的總長度
+  # returns BLEU, per-order precisions, brevity penalty, length ratio, generated length, reference length
   return (bleu, precisions, bp, ratio, translation_length, reference_length)
